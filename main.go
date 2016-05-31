@@ -1,17 +1,12 @@
 package main
 
 import (
-	"archive/zip"
 	"bufio"
 	"fmt"
-	"github.com/InkProject/ink.go"
 	"github.com/codegangsta/cli"
-	"github.com/go-fsnotify/fsnotify"
+	"github.com/facebookgo/symwalk"
 	"gopkg.in/yaml.v2"
-	"io"
 	"io/ioutil"
-	"math"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,12 +15,10 @@ import (
 )
 
 const (
-	VERSION      = "Beta (2015-06-04)"
-	DEFAULT_PATH = "blog"
-	DOWNLOAD_URL = "http://www.inkpaper.io/release/ink_blog.zip"
+	VERSION      = "Beta (2015-12-07)"
+	DEFAULT_ROOT = "blog"
 )
 
-var watcher *fsnotify.Watcher
 var globalConfig *GlobalConfig
 var rootPath string
 
@@ -37,13 +30,14 @@ func main() {
 	app.Email = "imeoer@gmail.com"
 	app.Version = VERSION
 	app.Commands = []cli.Command{
-		// {
-		// 	Name:  "init",
-		// 	Usage: "Init blog in a specified directory",
-		// 	Action: func(c *cli.Context) {
-		// 		Init(c)
-		// 	},
-		// },
+		{
+			Name:  "build",
+			Usage: "Generate blog to public folder",
+			Action: func(c *cli.Context) {
+				ParseGlobalConfigByCli(c, false)
+				Build()
+			},
+		},
 		{
 			Name:  "preview",
 			Usage: "Run in server mode to preview blog",
@@ -51,7 +45,7 @@ func main() {
 				ParseGlobalConfigByCli(c, true)
 				Build()
 				Watch()
-				Server()
+				Serve()
 			},
 		},
 		{
@@ -64,28 +58,22 @@ func main() {
 			},
 		},
 		{
+			Name:  "serve",
+			Usage: "Run in server mode to serve blog",
+			Action: func(c *cli.Context) {
+				ParseGlobalConfigByCli(c, true)
+				Build()
+				Watch()
+				Serve()
+			},
+		},
+		{
 			Name:  "convert",
-			Usage: "Convert Jekyll/Hexo post format to Ink format",
+			Usage: "Convert Jekyll/Hexo post format to Ink format (Beta)",
 			Action: func(c *cli.Context) {
 				Convert(c)
 			},
 		},
-	}
-	app.Action = func(c *cli.Context) {
-		ParseGlobalConfig(".", false)
-		if globalConfig == nil {
-			ParseGlobalConfig(DEFAULT_PATH, false)
-			if globalConfig == nil {
-				// Init(nil)
-				// ParseGlobalConfig(DEFAULT_PATH, true)
-				Fatal("Config.yml not found, please specify a valid blog directory")
-			}
-		}
-		if globalConfig != nil {
-			Build()
-			Watch()
-			Server()
-		}
 	}
 	app.Run(os.Args)
 }
@@ -96,65 +84,20 @@ func ParseGlobalConfigByCli(c *cli.Context, develop bool) {
 	} else {
 		rootPath = "."
 	}
-	ParseGlobalConfig(rootPath, develop)
+	ParseGlobalConfigWrap(rootPath, develop)
 	if globalConfig == nil {
-		Fatal("Parse config.yml failed, please specify a valid path")
+		ParseGlobalConfigWrap(DEFAULT_ROOT, develop)
+		if globalConfig == nil {
+			Fatal("Parse config.yml failed, please specify a valid path")
+		}
 	}
 }
 
-func ParseGlobalConfig(root string, develop bool) {
+func ParseGlobalConfigWrap(root string, develop bool) {
 	rootPath = root
-	globalConfig = ParseConfig(filepath.Join(rootPath, "config.yml"))
+	globalConfig = ParseGlobalConfig(filepath.Join(rootPath, "config.yml"), develop)
 	if globalConfig == nil {
 		return
-	}
-	globalConfig.Develop = develop
-	if develop {
-		globalConfig.Site.Root = ""
-	}
-	globalConfig.Site.Logo = ReplaceRootFlag(globalConfig.Site.Logo)
-}
-
-func Server() {
-	port := globalConfig.Build.Port
-	if port == "" {
-		port = "8888"
-	}
-	app := ink.New()
-	app.Get("*", ink.Static(filepath.Join(rootPath, "public")))
-	app.Head("*", ink.Static(filepath.Join(rootPath, "public")))
-	Log("Open http://localhost:" + port + "/ to preview")
-	app.Listen("0.0.0.0:" + port)
-}
-
-func Watch() {
-	watcher, _ = fsnotify.NewWatcher()
-	// Listen watched file change event
-	go func() {
-		for {
-			select {
-			case event := <-watcher.Events:
-				if event.Op == fsnotify.Write {
-					// Handle when file change
-					Build()
-				}
-			case err := <-watcher.Errors:
-				Log(err.Error())
-			}
-		}
-	}()
-	var dirs = []string{"source"}
-	for _, source := range dirs {
-		dirPath := filepath.Join(rootPath, source)
-		filepath.Walk(dirPath, func(path string, f os.FileInfo, err error) error {
-			if f.IsDir() {
-				// Defer watcher.Close()
-				if err := watcher.Add(path); err != nil {
-					Log(err.Error())
-				}
-			}
-			return nil
-		})
 	}
 }
 
@@ -212,7 +155,7 @@ func Convert(c *cli.Context) {
 	}
 	// Parse Jekyll/Hexo post file
 	count := 0
-	filepath.Walk(sourcePath, func(path string, f os.FileInfo, err error) error {
+	symwalk.Walk(sourcePath, func(path string, f os.FileInfo, err error) error {
 		fileExt := strings.ToLower(filepath.Ext(path))
 		if fileExt == ".md" || fileExt == ".html" {
 			// Read data from file
@@ -239,6 +182,15 @@ func Convert(c *cli.Context) {
 			if err = yaml.Unmarshal([]byte(configStr), &article); err != nil {
 				Fatal(err.Error())
 			}
+			tags := make(map[string]bool)
+			for _, t := range article.Tags {
+				tags[t] = true
+			}
+			for _, c := range article.Categories {
+				if _, ok := tags[c]; !ok {
+					article.Tags = append(article.Tags, c)
+				}
+			}
 			if article.Author == "" {
 				article.Author = "me"
 			}
@@ -260,98 +212,15 @@ func Convert(c *cli.Context) {
 				Fatal(err.Error())
 			}
 			inkConfigStr := string(inkConfig)
-			markdownStr := inkConfigStr + "\n\n---\n\n" + contentStr
-			ioutil.WriteFile(filepath.Join(rootPath, "source/"+fileName+".md"), []byte(markdownStr), 0666)
+			markdownStr := inkConfigStr + "\n\n---\n\n" + contentStr + "\n"
+			targetName := "source/" + fileName
+			if fileExt != ".md" {
+				targetName = targetName + ".md"
+			}
+			ioutil.WriteFile(filepath.Join(rootPath, targetName), []byte(markdownStr), 0644)
 			count++
 		}
 		return nil
 	})
 	fmt.Printf("\nConvert finish, total %v articles\n", count)
-}
-
-// Download and extract Ink template
-
-type Download struct {
-	io.Reader
-	length int64
-	total  int64
-}
-
-func (dn *Download) Read(p []byte) (int, error) {
-	n, err := dn.Reader.Read(p)
-	dn.total += int64(n)
-	if err == nil {
-		percent := math.Ceil(float64(dn.total) / float64(dn.length) * 100)
-		fmt.Printf("\rDownload %.f%% ...\r", percent)
-	}
-	return n, err
-}
-
-func Init(c *cli.Context) {
-	// Parse arguments
-	var directory string
-	if c == nil {
-		directory = DEFAULT_PATH
-	} else {
-		args := c.Args()
-		if len(args) > 0 {
-			directory = args[0]
-		} else {
-			Fatal("Please specify a new blog directory name")
-		}
-	}
-	// Create blog directory
-	err := os.MkdirAll(directory, 0777)
-	if err != nil {
-		Fatal(err.Error())
-	}
-	zipPath := filepath.Join(os.TempDir(), "ink_blog.zip")
-	zipOut, err := os.Create(zipPath)
-	if err != nil {
-		Fatal(err.Error())
-	}
-	defer zipOut.Close()
-	// Http get request for zip
-	fmt.Printf("Connecting server to init blog\r")
-	resp, err := http.Get(DOWNLOAD_URL)
-	if err != nil {
-		Fatal(err.Error())
-	}
-	defer resp.Body.Close()
-	// Get download progress
-	zipSrc := &Download{Reader: resp.Body, length: resp.ContentLength}
-	_, err = io.Copy(zipOut, zipSrc)
-	if err != nil {
-		Fatal(err.Error())
-	}
-	// Extract downloaded zip file
-	r, err := zip.OpenReader(zipPath)
-	if err != nil {
-		Fatal(err.Error())
-	}
-	defer r.Close()
-	for _, f := range r.File {
-		rc, err := f.Open()
-		if err != nil {
-			Fatal(err.Error())
-		}
-		isDir := f.FileInfo().IsDir()
-		if isDir {
-			err = os.MkdirAll(filepath.Join(directory, f.Name), 0777)
-			if err != nil {
-				Fatal(err.Error())
-			}
-		} else {
-			extractOut, err := os.Create(filepath.Join(directory, f.Name))
-			if err != nil {
-				Fatal(err.Error())
-			}
-			_, err = io.Copy(extractOut, rc)
-			if err != nil {
-				Fatal(err.Error())
-			}
-		}
-		rc.Close()
-	}
-	Log("Blog created in " + directory + ", use 'ink preview " + directory + "' to preview")
 }

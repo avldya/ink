@@ -8,20 +8,37 @@ import (
 	"strconv"
 )
 
-func CompileTpl(tplPath string, name string) template.Template {
+type Data interface{}
+
+type RenderArticle struct {
+	Article
+	Next *Article
+	Prev *Article
+}
+
+// Compile html template
+func CompileTpl(tplPath string, partialTpl string, name string) template.Template {
 	// Read template data from file
 	html, err := ioutil.ReadFile(tplPath)
 	if err != nil {
 		Fatal(err.Error())
 	}
+	// Append partial template
+	htmlStr := string(html) + partialTpl
+	funcMap := template.FuncMap{
+		"i18n": func(val string) string {
+			return globalConfig.I18n[val]
+		},
+	}
 	// Generate html content
-	tpl, err := template.New(name).Parse(string(html))
+	tpl, err := template.New(name).Funcs(funcMap).Parse(htmlStr)
 	if err != nil {
 		Fatal(err.Error())
 	}
 	return *tpl
 }
 
+// Render html file by data
 func RenderPage(tpl template.Template, tplData interface{}, outPath string) {
 	// Create file
 	outFile, err := os.Create(outPath)
@@ -39,8 +56,29 @@ func RenderPage(tpl template.Template, tplData interface{}, outPath string) {
 	}
 }
 
-// Generate html file by article data
-func RenderArticles(rootPath string, articles Collections, tagName string) {
+// Generate all article page
+func RenderArticles(tpl template.Template, articles Collections) {
+	defer wg.Done()
+	articleCount := len(articles)
+	for i, _ := range articles {
+		currentArticle := articles[i].(Article)
+		var renderArticle = RenderArticle{currentArticle, nil, nil}
+		if i >= 1 {
+			article := articles[i-1].(Article)
+			renderArticle.Prev = &article
+		}
+		if i <= articleCount-2 {
+			article := articles[i+1].(Article)
+			renderArticle.Next = &article
+		}
+		outPath := filepath.Join(publicPath, currentArticle.Link)
+		wg.Add(1)
+		go RenderPage(tpl, renderArticle, outPath)
+	}
+}
+
+// Generate article list page
+func RenderArticleList(rootPath string, articles Collections, tagName string) {
 	defer wg.Done()
 	// Create path
 	pagePath := filepath.Join(publicPath, rootPath)
@@ -80,6 +118,7 @@ func RenderArticles(rootPath string, articles Collections, tagName string) {
 		var data = map[string]interface{}{
 			"Articles": articles[first:count],
 			"Site":     globalConfig.Site,
+			"Develop":  globalConfig.Develop,
 			"Page":     i + 1,
 			"Total":    page,
 			"Prev":     prev,

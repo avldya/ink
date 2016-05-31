@@ -4,27 +4,22 @@
         <meta charset="utf-8">
         <meta http-equiv="X-UA-Compatible" content="IE=edge">
         <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=1, minimum-scale=1, maximum-scale=1">
-        <link rel="stylesheet" href="{{.Site.Root}}/css/global.css">
-        <link rel="stylesheet" href="{{.Site.Root}}/css/index.css">
-        <title>ABOUT</title>
+        <link rel="stylesheet" href="{{.Site.Root}}/bundle/index.css">
+        <title>关于</title>
     </head>
     <body>
         <div class="container">
-            <a class="index" href="{{.Site.Root}}/">{{.Site.Title}}</a>
-            <ul class="menu">
-                <li class="menu-item"><a href="{{.Site.Root}}/archive.html">ARCHIVE</a></li>
-                <li class="menu-item"><a href="{{.Site.Root}}/tag.html">TAG</a></li>
-            </ul>
+            {{template "header" .}}
             <div class="main page about">
                 <div class="header site">
                     {{if .Site.Logo}}<div class="logo" style="background-image: url({{.Site.Logo}});"></div>{{end}}
                     <div class="title">{{.Site.Title}}</div>
                     <div class="subtitle">{{.Site.Subtitle}}</div>
                 </div>
-                <div class="content">
-                    <h3>iMeoer</h3>
-                    <p>Programmer，Love Design & ACG</p>
-                    <p>Github：<a href="https://github.com/imeoer">https://github.com/imeoer</a></p>
+                <div class="info">
+                    <h3>猫叔 & iMeoer</h3>
+                    <p>代码，美术，音乐与二次元</p>
+                    <p>http://www.inkpaper.io/blog</p>
                 </div>
             </div>
         </div>
